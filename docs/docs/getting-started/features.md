@@ -541,7 +541,3 @@ dtype: float64
 >>> pf.total_return()
 5.96813681074424
 ```
-
-## Want more?
-
-Discover the features of [vectorbt PRO](https://vectorbt.pro/) :rocket:
