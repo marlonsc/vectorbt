@@ -1,4 +1,4 @@
-# Copyright (c) 2021 Oleg Polakow. All rights reserved.
+# Copyright (c) 2017-2026 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
 """Numba-compiled functions.
@@ -69,15 +69,14 @@ def col_range_select_nb(col_range: tp.ColRange, new_cols: tp.Array1d) -> tp.Tupl
         if from_r == -1 or to_r == -1:
             continue
         rang = np.arange(from_r, to_r)
-        indices_out[j:j + rang.shape[0]] = rang
-        col_arr_out[j:j + rang.shape[0]] = c
+        indices_out[j : j + rang.shape[0]] = rang
+        col_arr_out[j : j + rang.shape[0]] = c
         j += rang.shape[0]
     return indices_out, col_arr_out
 
 
 @njit(cache=True)
-def record_col_range_select_nb(records: tp.RecordArray, col_range: tp.ColRange,
-                               new_cols: tp.Array1d) -> tp.RecordArray:
+def record_col_range_select_nb(records: tp.RecordArray, col_range: tp.ColRange, new_cols: tp.Array1d) -> tp.RecordArray:
     """Perform indexing on sorted records using column range `col_range`.
 
     Returns new records."""
@@ -92,8 +91,8 @@ def record_col_range_select_nb(records: tp.RecordArray, col_range: tp.ColRange,
         if from_r == -1 or to_r == -1:
             continue
         col_records = np.copy(records[from_r:to_r])
-        col_records['col'][:] = c  # don't forget to assign new column indices
-        out[j:j + col_records.shape[0]] = col_records
+        col_records["col"][:] = c  # don't forget to assign new column indices
+        out[j : j + col_records.shape[0]] = col_records
         j += col_records.shape[0]
     return out
 
@@ -137,9 +136,9 @@ def col_map_select_nb(col_map: tp.ColMap, new_cols: tp.Array1d) -> tp.Tuple[tp.A
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[new_col]
-        idxs = col_idxs[col_start_idx:col_start_idx + col_len]
-        idxs_out[j:j + col_len] = idxs
-        col_arr_out[j:j + col_len] = new_col_i
+        idxs = col_idxs[col_start_idx : col_start_idx + col_len]
+        idxs_out[j : j + col_len] = idxs
+        col_arr_out[j : j + col_len] = new_col_i
         j += col_len
     return idxs_out, col_arr_out
 
@@ -158,10 +157,10 @@ def record_col_map_select_nb(records: tp.RecordArray, col_map: tp.ColMap, new_co
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[new_col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         col_records = np.copy(records[ridxs])
-        col_records['col'][:] = new_col_i
-        out[j:j + col_len] = col_records
+        col_records["col"][:] = new_col_i
+        out[j : j + col_len] = col_records
         j += col_len
     return out
 
@@ -193,8 +192,12 @@ def is_col_idx_sorted_nb(col_arr: tp.Array1d, id_arr: tp.Array1d) -> bool:
 
 
 @njit
-def mapped_to_mask_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
-                      inout_map_func_nb: tp.MaskInOutMapFunc, *args) -> tp.Array1d:
+def mapped_to_mask_nb(
+    mapped_arr: tp.Array1d,
+    col_map: tp.ColMap,
+    inout_map_func_nb: tp.MaskInOutMapFunc,
+    *args,
+) -> tp.Array1d:
     """Map mapped array to a mask per column.
 
     Returns the same shape as `mapped_arr`.
@@ -210,7 +213,7 @@ def mapped_to_mask_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         inout_map_func_nb(inout, ridxs, col, mapped_arr[ridxs], *args)
     return inout
 
@@ -218,19 +221,133 @@ def mapped_to_mask_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
 @njit(cache=True)
 def top_n_inout_map_nb(inout: tp.Array1d, idxs: tp.Array1d, col: int, mapped_arr: tp.Array1d, n: int) -> None:
     """`inout_map_func_nb` that returns indices of top N elements."""
-    # TODO: np.argpartition
-    inout[idxs[np.argsort(mapped_arr)[-n:]]] = True
+    if n <= 0:
+        return
+    col_len = mapped_arr.shape[0]
+    if n >= col_len:
+        inout[idxs] = True
+        return
+
+    n_valid = 0
+    for i in range(col_len):
+        if mapped_arr[i] == mapped_arr[i]:
+            n_valid += 1
+
+    if n_valid == 0:
+        n_remaining = n
+        for i in range(col_len - 1, -1, -1):
+            inout[idxs[i]] = True
+            n_remaining -= 1
+            if n_remaining == 0:
+                break
+        return
+
+    valid_mapped_arr = np.empty(n_valid, dtype=mapped_arr.dtype)
+    j = 0
+    for i in range(col_len):
+        if mapped_arr[i] == mapped_arr[i]:
+            valid_mapped_arr[j] = mapped_arr[i]
+            j += 1
+
+    if n > n_valid:
+        for i in range(col_len):
+            if mapped_arr[i] == mapped_arr[i]:
+                inout[idxs[i]] = True
+        n_remaining = n - n_valid
+        for i in range(col_len - 1, -1, -1):
+            if mapped_arr[i] != mapped_arr[i]:
+                inout[idxs[i]] = True
+                n_remaining -= 1
+                if n_remaining == 0:
+                    break
+        return
+
+    n_partition = n_valid - n
+    pivot = np.partition(valid_mapped_arr, n_partition)[n_partition]
+    n_greater = 0
+    for i in range(col_len):
+        if mapped_arr[i] == mapped_arr[i] and mapped_arr[i] > pivot:
+            n_greater += 1
+            inout[idxs[i]] = True
+    n_remaining = n - n_greater
+    if n_remaining <= 0:
+        return
+    for i in range(col_len - 1, -1, -1):
+        if mapped_arr[i] == mapped_arr[i] and mapped_arr[i] == pivot:
+            inout[idxs[i]] = True
+            n_remaining -= 1
+            if n_remaining == 0:
+                break
 
 
 @njit(cache=True)
 def bottom_n_inout_map_nb(inout: tp.Array1d, idxs: tp.Array1d, col: int, mapped_arr: tp.Array1d, n: int) -> None:
     """`inout_map_func_nb` that returns indices of bottom N elements."""
-    inout[idxs[np.argsort(mapped_arr)[:n]]] = True
+    if n <= 0:
+        return
+    col_len = mapped_arr.shape[0]
+    if n >= col_len:
+        inout[idxs] = True
+        return
+
+    n_valid = 0
+    for i in range(col_len):
+        if mapped_arr[i] == mapped_arr[i]:
+            n_valid += 1
+
+    if n_valid == 0:
+        n_remaining = n
+        for i in range(col_len):
+            inout[idxs[i]] = True
+            n_remaining -= 1
+            if n_remaining == 0:
+                break
+        return
+
+    valid_mapped_arr = np.empty(n_valid, dtype=mapped_arr.dtype)
+    j = 0
+    for i in range(col_len):
+        if mapped_arr[i] == mapped_arr[i]:
+            valid_mapped_arr[j] = mapped_arr[i]
+            j += 1
+
+    if n > n_valid:
+        for i in range(col_len):
+            if mapped_arr[i] == mapped_arr[i]:
+                inout[idxs[i]] = True
+        n_remaining = n - n_valid
+        for i in range(col_len):
+            if mapped_arr[i] != mapped_arr[i]:
+                inout[idxs[i]] = True
+                n_remaining -= 1
+                if n_remaining == 0:
+                    break
+        return
+
+    pivot = np.partition(valid_mapped_arr, n - 1)[n - 1]
+    n_less = 0
+    for i in range(col_len):
+        if mapped_arr[i] == mapped_arr[i] and mapped_arr[i] < pivot:
+            n_less += 1
+            inout[idxs[i]] = True
+    n_remaining = n - n_less
+    if n_remaining <= 0:
+        return
+    for i in range(col_len):
+        if mapped_arr[i] == mapped_arr[i] and mapped_arr[i] == pivot:
+            inout[idxs[i]] = True
+            n_remaining -= 1
+            if n_remaining == 0:
+                break
 
 
 @njit
-def apply_on_mapped_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
-                       apply_func_nb: tp.MappedApplyFunc, *args) -> tp.Array1d:
+def apply_on_mapped_nb(
+    mapped_arr: tp.Array1d,
+    col_map: tp.ColMap,
+    apply_func_nb: tp.MappedApplyFunc,
+    *args,
+) -> tp.Array1d:
     """Apply function on mapped array per column.
 
     Returns the same shape as `mapped_arr`.
@@ -246,14 +363,18 @@ def apply_on_mapped_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         out[ridxs] = apply_func_nb(ridxs, col, mapped_arr[ridxs], *args)
     return out
 
 
 @njit
-def apply_on_records_nb(records: tp.RecordArray, col_map: tp.ColMap,
-                        apply_func_nb: tp.RecordApplyFunc, *args) -> tp.Array1d:
+def apply_on_records_nb(
+    records: tp.RecordArray,
+    col_map: tp.ColMap,
+    apply_func_nb: tp.RecordApplyFunc,
+    *args,
+) -> tp.Array1d:
     """Apply function on records per column.
 
     Returns the same shape as `records`.
@@ -268,7 +389,7 @@ def apply_on_records_nb(records: tp.RecordArray, col_map: tp.ColMap,
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         out[ridxs] = apply_func_nb(records[ridxs], *args)
     return out
 
@@ -386,9 +507,15 @@ def stack_expand_mapped_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, fill_valu
 
 # ############# Reducing ############# #
 
+
 @njit
-def reduce_mapped_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, fill_value: float,
-                     reduce_func_nb: tp.ReduceFunc, *args) -> tp.Array1d:
+def reduce_mapped_nb(
+    mapped_arr: tp.Array1d,
+    col_map: tp.ColMap,
+    fill_value: float,
+    reduce_func_nb: tp.ReduceFunc,
+    *args,
+) -> tp.Array1d:
     """Reduce mapped array by column to a single value.
 
     Faster than `expand_mapped_nb` and `vbt.*` used together, and also
@@ -405,14 +532,20 @@ def reduce_mapped_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, fill_value: flo
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         out[col] = reduce_func_nb(col, mapped_arr[ridxs], *args)
     return out
 
 
 @njit
-def reduce_mapped_to_idx_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, idx_arr: tp.Array1d,
-                            fill_value: float, reduce_func_nb: tp.ReduceFunc, *args) -> tp.Array1d:
+def reduce_mapped_to_idx_nb(
+    mapped_arr: tp.Array1d,
+    col_map: tp.ColMap,
+    idx_arr: tp.Array1d,
+    fill_value: float,
+    reduce_func_nb: tp.ReduceFunc,
+    *args,
+) -> tp.Array1d:
     """Reduce mapped array by column to an index.
 
     Same as `reduce_mapped_nb` except `idx_arr` should be passed.
@@ -428,15 +561,20 @@ def reduce_mapped_to_idx_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, idx_arr:
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         col_out = reduce_func_nb(col, mapped_arr[ridxs], *args)
         out[col] = idx_arr[ridxs][col_out]
     return out
 
 
 @njit
-def reduce_mapped_to_array_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, fill_value: float,
-                              reduce_func_nb: tp.ReduceFunc, *args) -> tp.Array2d:
+def reduce_mapped_to_array_nb(
+    mapped_arr: tp.Array1d,
+    col_map: tp.ColMap,
+    fill_value: float,
+    reduce_func_nb: tp.ReduceFunc,
+    *args,
+) -> tp.Array2d:
     """Reduce mapped array by column to an array.
 
     `reduce_func_nb` same as for `reduce_mapped_nb` but should return an array."""
@@ -446,7 +584,7 @@ def reduce_mapped_to_array_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, fill_v
         col_len = col_lens[col]
         if col_len > 0:
             col_start_idx = col_start_idxs[col]
-            col0, idxs0 = col, col_idxs[col_start_idx:col_start_idx + col_len]
+            col0, idxs0 = col, col_idxs[col_start_idx : col_start_idx + col_len]
             break
 
     col_out = reduce_func_nb(col0, mapped_arr[idxs0], *args)
@@ -458,14 +596,20 @@ def reduce_mapped_to_array_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, fill_v
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         out[:, col] = reduce_func_nb(col, mapped_arr[ridxs], *args)
     return out
 
 
 @njit
-def reduce_mapped_to_idx_array_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, idx_arr: tp.Array1d,
-                                  fill_value: float, reduce_func_nb: tp.ReduceFunc, *args) -> tp.Array2d:
+def reduce_mapped_to_idx_array_nb(
+    mapped_arr: tp.Array1d,
+    col_map: tp.ColMap,
+    idx_arr: tp.Array1d,
+    fill_value: float,
+    reduce_func_nb: tp.ReduceFunc,
+    *args,
+) -> tp.Array2d:
     """Reduce mapped array by column to an index array.
 
     Same as `reduce_mapped_to_array_nb` except `idx_arr` should be passed.
@@ -478,7 +622,7 @@ def reduce_mapped_to_idx_array_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, id
         col_len = col_lens[col]
         if col_len > 0:
             col_start_idx = col_start_idxs[col]
-            col0, idxs0 = col, col_idxs[col_start_idx:col_start_idx + col_len]
+            col0, idxs0 = col, col_idxs[col_start_idx : col_start_idx + col_len]
             break
 
     col_out = reduce_func_nb(col0, mapped_arr[idxs0], *args)
@@ -490,7 +634,7 @@ def reduce_mapped_to_idx_array_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap, id
         if col_len == 0:
             continue
         col_start_idx = col_start_idxs[col]
-        ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
+        ridxs = col_idxs[col_start_idx : col_start_idx + col_len]
         col_out = reduce_func_nb(col, mapped_arr[ridxs], *args)
         out[:, col] = idx_arr[ridxs][col_out]
     return out
